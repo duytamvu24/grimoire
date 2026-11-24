@@ -1811,7 +1811,7 @@ function bmrFacts(p){
 /* ===== QR-Modus: Handys der Spieler verbinden (nur wenn gewählt) ===== */
 const QR_LIBS = {peer:"https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js", qr:"https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"};
 const ONE_SHOT = ["slayer","virgin","courtier","professor","assassin"];
-const net = {peer:null, conns:{}, status:"off", err:"", sent:{}, retry:null, names:{}};
+const net = {peer:null, conns:{}, status:"off", err:"", sent:{}, scriptSent:{}, retry:null, names:{}};
 function loadScript(src){ return new Promise((ok,no)=>{ const s=document.createElement("script"); s.src=src; s.onload=ok; s.onerror=()=>no(new Error("load")); document.head.appendChild(s); }); }
 async function qrLibs(){ if(!window.Peer) await loadScript(QR_LIBS.peer); if(!window.qrcode) await loadScript(QR_LIBS.qr); }
 function peerOpts(){ return Object.assign({debug:0}, window.GRIM_PEER||{}); }
@@ -1856,7 +1856,7 @@ const cleanName = n=>String(n||"").replace(/\s+/g," ").trim().slice(0,24);
 function qrHello(c, pid, name){
   pid = String(pid).slice(0,48); name = cleanName(name);
   const old = net.conns[pid]; if(old && old!==c){ try{ old.close(); }catch(e){} }
-  net.conns[pid] = c; c._pid = pid; delete net.sent[pid]; net.names[pid] = name;
+  net.conns[pid] = c; c._pid = pid; delete net.sent[pid]; delete net.scriptSent[pid]; net.names[pid] = name;
   const p = state.players.find(x=>x.pid===pid);
   if(p){ if(name && (!p.name.trim() || p.phoneName)) { p.name = name; p.phoneName = true; } }
   else qrSeat(pid, name);
@@ -1916,12 +1916,25 @@ function qrPayload(p){
   return {...base, phase:"day", day:state.night, seat:i+1,
     role:{id:r.id, name:r.name, type:r.type, typeLabel:t.one, color:t.color, typeText:t.text, icon:ICONS[r.icon]||"", text:r.text, tips:((TIPS[r.id]||{}).pl)||[]},
     dead:!!p.dead && !p.zFake, zFake:!!p.zFake, ghostUsed:!!p.ghostUsed, ability:one,
-    align: p.traveller ? (p.align==="evil"?"evil":"good") : null};
+    align: p.traveller ? (p.align==="evil"?"evil":"good") : null, square:qrSquare()};
+}
+/* Stadtplatz: nur öffentliche Infos (Name, lebt/tot, Geisterstimme, Traveller sind offen bekannt) */
+function qrSquare(){
+  const L = state.players.map((x,i)=>({n:displayName(x,i), dead:!!x.dead, ghost:!!x.dead && !x.ghostUsed, trav: x.traveller ? (R[x.role]?R[x.role].name:"Traveller") : null, exiled:!!x.exiled}));
+  return {need:voteNeed(), alive:state.players.filter(x=>!x.dead).length, ghosts:state.players.filter(x=>x.dead && !x.ghostUsed).length, list:L};
+}
+/* Skript: alle Rollen der Edition plus Nachtreihenfolge, wie das Rollenblatt am Tisch */
+function qrScript(){
+  const groups = ["tf","os","mi","de"].map(t=>({label:TYPES[t].label, color:TYPES[t].color, textColor:TYPES[t].text, roles:EROLES(t).map(r=>({name:r.name, icon:ICONS[r.icon]||"", text:r.text}))}));
+  if(TRAVL().length) groups.push({label:"Traveller", color:TYPES.tr.color, textColor:TYPES.tr.text, roles:TRAVL().map(id=>({name:R[id].name, icon:ICONS[R[id].icon]||"", text:R[id].text}))});
+  const order = first=>nightList(first).filter(id=>!["newimp","travellerinfo"].includes(id) && !(R[id] && R[id].type==="tr")).map(id=>id==="minioninfo"?"Minion-Info":id==="demoninfo"?"Demon-Info":id==="lunaticinfo"?"Lunatic":R[id].name);
+  return {t:"script", ed:ED(), edName:EDITIONS[ED()].name, groups, first:order(true), other:order(false)};
 }
 function qrSync(){
   if(!qrOn() || !net.peer) return;
   Object.entries(net.conns).forEach(([pid,c])=>{
     if(!c.open) return;
+    if(net.scriptSent[pid]!==ED()){ try{ c.send(qrScript()); net.scriptSent[pid]=ED(); }catch(e){} }
     const p = state.players.find(x=>x.pid===pid);
     const pl = p ? qrPayload(p) : {t:"state", phase:"wait", name:net.names[pid]||"", edName:EDITIONS[ED()].name, ed:ED()};
     const s = JSON.stringify(pl);
